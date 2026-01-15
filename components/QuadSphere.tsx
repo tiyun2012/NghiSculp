@@ -2,8 +2,8 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import { TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore, MeshNode } from '../store';
-import { createQuadGeometry, createQuadWireframe } from '../utils/geometry';
-import { computeBooleanGeometry } from '../utils/csg';
+import { createQuadWireframe } from '../utils/geometry';
+import { getRecursiveGeometry } from '../utils/csg';
 
 interface QuadMeshProps {
   data: MeshNode;
@@ -21,78 +21,81 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   const updateMesh = useStore((state) => state.updateMesh);
   const meshes = useStore((state) => state.meshes);
 
-  // Get direct children
+  // Get direct children for rendering in the scene graph
   const children = useMemo(() => 
     meshes.filter(m => m.parentId === data.id), 
     [meshes, data.id]
   );
 
   const isSelected = selectedMeshId === data.id;
-  const isOperator = data.operation !== 'union';
+  
+  // In "Solid" mode:
+  // - If a mesh has a parent, it contributes to the parent's shape and is rendered as a "Ghost/Controller"
+  // - If a mesh has no parent (Root), it renders the final Result.
+  const isChildModifier = !!data.parentId;
 
-  // 1. Generate Base Geometry (Procedural Box/Sphere/Capsule)
-  const baseGeometry = useMemo(() => {
-    return createQuadGeometry(data.type || 'sphere', Math.max(2, Math.floor(resolution)));
-  }, [resolution, data.type]);
-
-  // 2. Generate Base Wireframe (The nice quad grid)
-  const proceduralWireframe = useMemo(() => {
-    return createQuadWireframe(data.type || 'sphere', Math.max(2, Math.floor(resolution)));
-  }, [resolution, data.type]);
-
-  // 3. Compute Final Geometry via CSG
+  // 1. Compute Geometry
+  // We compute the *Recursive* geometry for this node.
+  // If it's a root, this includes all children contributions.
+  // If it's a child, this includes its own children contributions (if any), 
+  // which is then used by the parent.
+  // We use the full `meshes` array to allow the recursive function to walk the tree.
   const finalGeometry = useMemo(() => {
-    // If we are a 'subtract' node, we render ourself as a ghost using base geometry.
-    if (isOperator) return baseGeometry;
+    // Only compute solid geometry if we are a root or needed for visualization
+    const geo = getRecursiveGeometry(data.id, meshes, Math.max(2, Math.floor(resolution)));
+    // Provide a way to identify it in debugger if needed
+    geo.name = `Procedural_${data.name || data.type}_${data.id.slice(0,4)}`;
+    return geo;
+  }, [data.id, meshes, resolution, data.name, data.type]);
 
-    // Identify operators among children
-    // Filter out hidden operators so they don't affect the shape when hidden
-    const activeOperators = children.filter(c => c.operation !== 'union' && c.visible !== false);
-    
-    if (activeOperators.length === 0) return baseGeometry;
+  // Ensure disposal of geometry when it changes or component unmounts
+  useEffect(() => {
+    return () => {
+       finalGeometry.dispose();
+    }
+  }, [finalGeometry]);
 
-    // Generate geoms for operators
-    const opGeoms = new Map<string, THREE.BufferGeometry>();
-    activeOperators.forEach(child => {
-        const geo = createQuadGeometry(child.type || 'sphere', Math.max(2, Math.floor(resolution)));
-        opGeoms.set(child.id, geo);
-    });
 
-    return computeBooleanGeometry(data, baseGeometry, activeOperators, opGeoms);
-  }, [baseGeometry, children, resolution, isOperator, data]);
+  // 2. Wireframe for the "base" shape (before booleans) - mainly for Ghost mode
+  const wireframeGeo = useMemo(() => {
+    // If custom, we don't have a procedural wireframe
+    if (data.type === 'custom') return null;
+    return createQuadWireframe(data.type || 'sphere', Math.max(2, Math.floor(resolution)));
+  }, [data.type, resolution]);
 
-  // 4. Manage Wireframe Display
+
+  // 3. Manage Result Wireframe Display (for Roots)
   const [displayWireframe, setDisplayWireframe] = useState<THREE.BufferGeometry | null>(null);
 
   useEffect(() => {
-    if (!showWireframe) {
+    if (!showWireframe || isChildModifier) {
         setDisplayWireframe(null);
         return;
     }
 
-    // If using the base geometry (no CSG), use the efficient procedural wireframe
-    if (finalGeometry === baseGeometry) {
-        setDisplayWireframe(proceduralWireframe);
+    // If result matches the procedural wireframe (no ops), use optimized one
+    // We estimate this by checking if children count is 0
+    const hasChildren = meshes.some(m => m.parentId === data.id && m.visible !== false);
+    
+    if (!hasChildren && wireframeGeo && data.type !== 'custom') {
+        setDisplayWireframe(wireframeGeo);
         return;
     }
 
-    // If CSG is active, generate a wireframe from the result.
-    // We use WireframeGeometry to show the actual cut edges.
+    // Otherwise, generate from CSG result
     const geo = new THREE.WireframeGeometry(finalGeometry);
     setDisplayWireframe(geo);
 
     return () => {
         geo.dispose();
     };
-  }, [showWireframe, finalGeometry, baseGeometry, proceduralWireframe]);
+  }, [showWireframe, finalGeometry, wireframeGeo, isChildModifier, meshes, data.id, data.type]);
 
 
   const [hovered, setHover] = useState(false);
 
-  // Use useCallback to prevent thrashing
   const handleTransformChange = useCallback(() => {
     if (meshRef.current) {
-      // Sync Three.js transform to Zustand store
       updateMesh(data.id, {
         position: meshRef.current.position.toArray(),
         rotation: meshRef.current.rotation.toArray().slice(0, 3) as [number, number, number],
@@ -101,13 +104,19 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
     }
   }, [data.id, updateMesh]);
 
-  // If hidden, render nothing
-  if (data.visible === false) {
-      return null;
-  }
+  if (data.visible === false) return null;
 
-  // If this mesh is a "Subtract" operator, render it as a wireframe/ghost
-  if (isOperator) {
+  // --- RENDER LOGIC ---
+
+  // CASE A: Modifier / Child Node
+  // Render as a semi-transparent ghost with wireframe to allow selection and manipulation.
+  // The actual volume is added to the parent by the parent's CSG calculation.
+  if (isChildModifier) {
+      let color = "#888888";
+      if (data.operation === 'union') color = "#4444ff"; // Blue for Add
+      if (data.operation === 'subtract') color = "#ff4444"; // Red for Sub
+      if (data.operation === 'intersect') color = "#44ff44"; // Green for Intersect
+
       return (
         <>
             {isSelected && (
@@ -116,6 +125,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
                   mode={transformMode} 
                   onObjectChange={handleTransformChange}
                   size={0.8}
+                  space="local" // Modifiers transform in local space
                 />
             )}
             <mesh
@@ -123,24 +133,30 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
                 position={data.position}
                 rotation={data.rotation}
                 scale={[data.scale, data.scale, data.scale]}
-                geometry={baseGeometry}
+                // For the ghost, we show the calculated geometry of this subtree
+                // This lets you see what this specific part looks like
+                geometry={finalGeometry} 
                 onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
                 onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
                 onPointerOut={(e) => { e.stopPropagation(); setHover(false); }}
             >
                 <meshBasicMaterial 
-                    color={data.operation === 'subtract' ? "#ff4444" : "#4444ff"} 
+                    color={color} 
                     wireframe 
                     transparent 
-                    opacity={0.3} 
+                    opacity={isSelected ? 0.4 : 0.15} 
+                    depthTest={false} // Always visible through parent
                 />
-                 {/* Render children to support nested hierarchies */}
+                
+                {/* Render children recursively so they also appear as ghosts if deeper in tree */}
                 {children.map(child => <QuadSphere key={child.id} data={child} />)}
             </mesh>
         </>
       );
   }
 
+  // CASE B: Root Node / Result
+  // Render the full solid CSG result.
   return (
     <>
       {isSelected && (
@@ -173,7 +189,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
         userData={{ isProceduralMesh: true, id: data.id }}
       >
         <meshMatcapMaterial 
-          color={hovered ? "#ffab91" : "#e0e0e0"} 
+          color={data.type === 'custom' ? "#d4d4d8" : (hovered ? "#ffab91" : "#e0e0e0")} 
           matcap={null}
         />
         <meshStandardMaterial
@@ -186,10 +202,11 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
 
         {showWireframe && displayWireframe && (
           <lineSegments geometry={displayWireframe}>
-            <lineBasicMaterial color="#333" opacity={0.3} transparent depthTest={false} />
+            <lineBasicMaterial color="#222" opacity={0.35} transparent depthTest={true} />
           </lineSegments>
         )}
 
+        {/* Render children. They will detect they are children and render as ghosts. */}
         {children.map(child => (
           <QuadSphere key={child.id} data={child} />
         ))}

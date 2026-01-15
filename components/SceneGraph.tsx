@@ -1,6 +1,18 @@
 import React from 'react';
 import { useStore, MeshNode } from '../store';
-import { Box, Circle, Cylinder, ChevronRight, CornerDownRight, GripVertical, Eye, EyeOff } from 'lucide-react';
+import { 
+  Box, 
+  Circle, 
+  Cylinder, 
+  ChevronRight, 
+  CornerDownRight, 
+  GripVertical, 
+  Eye, 
+  EyeOff,
+  Combine,
+  Scissors,
+  Crosshair
+} from 'lucide-react';
 
 interface GraphNodeProps {
   meshId: string;
@@ -16,6 +28,15 @@ const getIcon = (type: string) => {
   }
 };
 
+const getOpIcon = (op: string) => {
+    switch(op) {
+        case 'subtract': return Scissors;
+        case 'intersect': return Crosshair;
+        case 'union':
+        default: return Combine;
+    }
+}
+
 const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
   const meshes = useStore(state => state.meshes);
   const selectedMeshId = useStore(state => state.selectedMeshId);
@@ -30,6 +51,7 @@ const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
   if (!mesh) return null;
 
   const Icon = getIcon(mesh.type);
+  const OpIcon = getOpIcon(mesh.operation);
 
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('meshId', meshId);
@@ -66,10 +88,15 @@ const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
         <GripVertical size={12} className="opacity-0 group-hover:opacity-50 cursor-grab active:cursor-grabbing" />
         {depth > 0 && <CornerDownRight size={12} className="text-zinc-600" />}
         
+        {/* Operation Indicator */}
+        <div className="w-4 h-4 flex items-center justify-center" title={mesh.operation}>
+             <OpIcon size={12} className={mesh.operation === 'subtract' ? 'text-red-400' : (mesh.operation === 'intersect' ? 'text-emerald-400' : 'text-blue-400')} />
+        </div>
+
         <Icon size={14} className={isSelected ? 'text-indigo-400' : 'text-zinc-500'} />
         
         <span className="text-xs font-medium truncate select-none capitalize flex-1">
-           {mesh.type} {meshId.substring(0, 4)}
+           {mesh.name || `${mesh.type} ${meshId.substring(0, 4)}`}
         </span>
 
         <button 

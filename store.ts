@@ -1,11 +1,12 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
 
-export type MeshType = 'sphere' | 'cube' | 'capsule';
+export type MeshType = 'sphere' | 'cube' | 'capsule' | 'custom';
 export type MeshOperation = 'union' | 'subtract' | 'intersect';
 
 export interface MeshNode {
   id: string;
+  name?: string;
   type: MeshType;
   operation: MeshOperation;
   position: [number, number, number];
@@ -13,6 +14,12 @@ export interface MeshNode {
   scale: number;
   parentId: string | null;
   visible: boolean;
+  // For baked meshes
+  geometryData?: {
+    position: number[];
+    index?: number[];
+    normal?: number[];
+  };
 }
 
 interface AppState {

@@ -8,8 +8,6 @@ import {
   Zap, 
   Layers, 
   GitMerge,
-  Plus,
-  Trash,
   Box as BoxIcon,
   Circle,
   Cylinder,
@@ -43,6 +41,7 @@ export const UI = () => {
   const handleAddMesh = (type: MeshType) => {
     const newMesh: MeshNode = {
       id: uuidv4(),
+      name: `${type.charAt(0).toUpperCase() + type.slice(1)}`,
       type: type,
       operation: 'union',
       position: [0, 0, 0],
@@ -71,7 +70,13 @@ export const UI = () => {
 
     setIsGenerating(true);
     
-    const parent = meshes[Math.floor(Math.random() * meshes.length)];
+    // Target the selected mesh, or fallback to the first mesh (Root)
+    let parent = meshes[0];
+    if (selectedMeshId) {
+        const found = meshes.find(m => m.id === selectedMeshId);
+        if (found) parent = found;
+    }
+
     const u = Math.random();
     const v = Math.random();
     const theta = 2 * Math.PI * u;
@@ -82,14 +87,16 @@ export const UI = () => {
     const z = Math.cos(phi);
     
     const normal = new THREE.Vector3(x, y, z);
-    const localPos = normal.clone().multiplyScalar(1.0);
-    const localScale = 0.2 + Math.random() * 0.4;
+    // Align with surface (approx radius 0.5)
+    const localPos = normal.clone().multiplyScalar(0.5);
+    const localScale = 0.15 + Math.random() * 0.25;
     
     const newMesh: MeshNode = {
       id: uuidv4(),
+      name: 'Procedural Bump',
       type: 'sphere',
       operation: 'union',
-      position: localPos.toArray(),
+      position: localPos.toArray() as [number, number, number],
       rotation: [Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI],
       scale: localScale,
       parentId: parent.id,
@@ -101,12 +108,17 @@ export const UI = () => {
   };
 
   const handleRingGen = () => {
-    if (!selectedMeshId) return;
-    const parent = meshes.find(m => m.id === selectedMeshId);
-    if (!parent) return;
+    if (meshes.length === 0) return;
+    
+    let parent = meshes[0];
+    if (selectedMeshId) {
+        const found = meshes.find(m => m.id === selectedMeshId);
+        if (found) parent = found;
+    }
 
     const count = 6;
-    const radiusOffset = 1.2;
+    // Align with surface (approx radius 0.5)
+    const radiusOffset = 0.5; 
     
     for(let i=0; i<count; i++) {
         const angle = (i / count) * Math.PI * 2;
@@ -116,11 +128,12 @@ export const UI = () => {
 
         addMesh({
             id: uuidv4(),
+            name: `Ring Cutter ${i+1}`,
             type: 'cube',
             operation: 'subtract',
-            position: localPos.toArray(),
-            rotation: [0, 0, 0],
-            scale: 0.35,
+            position: localPos.toArray() as [number, number, number],
+            rotation: [0, Math.random() * Math.PI, 0],
+            scale: 0.2,
             parentId: parent.id,
             visible: true
         });
@@ -194,7 +207,7 @@ export const UI = () => {
            className="p-2 rounded-lg border border-red-500/20 bg-red-500/10 text-red-400 hover:bg-red-500/20 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
            title="Delete Selected"
         >
-           <Trash size={18} />
+           <Trash2 size={18} />
         </button>
       </div>
 
@@ -234,14 +247,14 @@ export const UI = () => {
                     <button 
                         onClick={() => handleSetOperation('union')} 
                         className={`flex-1 p-2 rounded-md flex justify-center ${selectedMesh.operation === 'union' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
-                        title="Union (Solid)"
+                        title="Union (Merge)"
                     >
                         <Combine size={16} />
                     </button>
                     <button 
                         onClick={() => handleSetOperation('subtract')} 
                         className={`flex-1 p-2 rounded-md flex justify-center ${selectedMesh.operation === 'subtract' ? 'bg-red-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
-                         title="Subtract (Cutter)"
+                         title="Subtract (Cut)"
                     >
                         <Scissors size={16} />
                     </button>
@@ -259,12 +272,12 @@ export const UI = () => {
             <div className="h-px bg-zinc-700 my-1"></div>
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1">Generators</h2>
 
-            <button onClick={handleGrow} disabled={meshes.length === 0 || isGenerating} className="tool-btn disabled">
+            <button onClick={handleGrow} disabled={meshes.length === 0 || isGenerating} className="tool-btn">
                 <div className="icon-box bg-emerald-500/20 group-hover:bg-emerald-500/30"><Zap size={16} className="text-emerald-400" /></div>
                 <span>Organic Grow</span>
             </button>
 
-            <button onClick={handleRingGen} disabled={meshes.length === 0 || !selectedMeshId} className="tool-btn disabled">
+            <button onClick={handleRingGen} disabled={meshes.length === 0} className="tool-btn">
                  <div className="icon-box bg-purple-500/20 group-hover:bg-purple-500/30"><GitMerge size={16} className="text-purple-400" /></div>
                 <span>Edge Satellite (Cut)</span>
             </button>
