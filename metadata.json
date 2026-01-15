@@ -1,0 +1,5 @@
+{
+  "name": "Z-Forge Web Sculptor",
+  "description": "A ZBrush-inspired 3D modeling tool featuring procedural quad-sphere generation, dynamic resolution control, and organic mesh growth algorithms.",
+  "requestFramePermissions": []
+}
