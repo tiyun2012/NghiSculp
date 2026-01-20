@@ -18,6 +18,7 @@ export const ConsoleBridge = () => {
          const id = uuidv4();
          const newMesh = {
             id,
+            name: 'Procedure Mesh',
             type,
             operation,
             position: [0, 0, 0] as [number, number, number],

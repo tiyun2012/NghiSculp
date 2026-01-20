@@ -4,6 +4,8 @@ import * as THREE from 'three';
 export type MeshType = 'sphere' | 'cube' | 'capsule' | 'custom';
 export type MeshOperation = 'union' | 'subtract' | 'intersect';
 
+export const PROCEDURE_MESH_ID = 'PROCEDURE_MESH_ROOT';
+
 export interface MeshNode {
   id: string;
   name?: string;
@@ -14,6 +16,7 @@ export interface MeshNode {
   scale: number;
   parentId: string | null;
   visible: boolean;
+  locked?: boolean; // For the procedure mesh
   // For baked meshes
   geometryData?: {
     position: number[];
@@ -33,6 +36,9 @@ interface AppState {
   
   showWireframe: boolean;
   setShowWireframe: (show: boolean) => void;
+
+  xrayMode: boolean;
+  setXrayMode: (enabled: boolean) => void;
 
   // Mesh Data
   meshes: MeshNode[];
@@ -56,6 +62,19 @@ const getDescendants = (meshes: MeshNode[], id: string): string[] => {
   return ids;
 };
 
+const DEFAULT_PROCEDURE_MESH: MeshNode = {
+    id: PROCEDURE_MESH_ID,
+    name: 'Procedure Mesh',
+    type: 'custom',
+    operation: 'union',
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: 1,
+    parentId: null,
+    visible: true,
+    locked: true
+};
+
 export const useStore = create<AppState>((set, get) => ({
   resolution: 8,
   setResolution: (resolution) => set({ resolution }),
@@ -66,7 +85,10 @@ export const useStore = create<AppState>((set, get) => ({
   showWireframe: true,
   setShowWireframe: (showWireframe) => set({ showWireframe }),
 
-  meshes: [], 
+  xrayMode: false,
+  setXrayMode: (xrayMode) => set({ xrayMode }),
+
+  meshes: [DEFAULT_PROCEDURE_MESH], 
   selectedMeshId: null,
 
   addMesh: (mesh) => set((state) => ({ 
@@ -75,6 +97,8 @@ export const useStore = create<AppState>((set, get) => ({
   })),
 
   removeMesh: (id) => set((state) => {
+    if (id === PROCEDURE_MESH_ID) return state; // Prevent deleting the main procedure mesh
+
     const idsToRemove = [id, ...getDescendants(state.meshes, id)];
     return {
       meshes: state.meshes.filter(m => !idsToRemove.includes(m.id)),
@@ -96,7 +120,13 @@ export const useStore = create<AppState>((set, get) => ({
     // 1. Cannot parent to self
     if (childId === parentId) return state;
 
-    // 2. Cycle Detection: Walk up from new parent. If we hit child, it's a cycle.
+    // 2. Cannot parent to the locked Procedure Mesh
+    if (parentId === PROCEDURE_MESH_ID) {
+        console.warn("Cannot parent items to the Procedure Mesh container.");
+        return state;
+    }
+
+    // 3. Cycle Detection
     let current = parentId;
     while (current) {
         if (current === childId) {
@@ -113,7 +143,7 @@ export const useStore = create<AppState>((set, get) => ({
   }),
   
   resetScene: () => set({
-    meshes: [],
+    meshes: [DEFAULT_PROCEDURE_MESH],
     selectedMeshId: null
   })
 }));

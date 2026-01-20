@@ -1,5 +1,5 @@
 import React from 'react';
-import { useStore, MeshNode } from '../store';
+import { useStore, MeshNode, PROCEDURE_MESH_ID } from '../store';
 import { 
   Box, 
   Circle, 
@@ -11,7 +11,9 @@ import {
   EyeOff,
   Combine,
   Scissors,
-  Crosshair
+  Crosshair,
+  Lock,
+  BoxSelect
 } from 'lucide-react';
 
 interface GraphNodeProps {
@@ -19,7 +21,8 @@ interface GraphNodeProps {
   depth: number;
 }
 
-const getIcon = (type: string) => {
+const getIcon = (type: string, isProcedure: boolean) => {
+  if (isProcedure) return BoxSelect;
   switch (type) {
     case 'cube': return Box;
     case 'capsule': return Cylinder;
@@ -47,13 +50,15 @@ const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
   const mesh = meshes.find(m => m.id === meshId);
   const children = meshes.filter(m => m.parentId === meshId);
   const isSelected = selectedMeshId === meshId;
+  const isProcedure = meshId === PROCEDURE_MESH_ID;
 
   if (!mesh) return null;
 
-  const Icon = getIcon(mesh.type);
+  const Icon = getIcon(mesh.type, isProcedure);
   const OpIcon = getOpIcon(mesh.operation);
 
   const handleDragStart = (e: React.DragEvent) => {
+    if (isProcedure) return; // Cannot drag procedure mesh
     e.dataTransfer.setData('meshId', meshId);
     e.stopPropagation();
   };
@@ -61,6 +66,8 @@ const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isProcedure) return; // Cannot drop onto procedure mesh (it is a separate container)
+
     const draggedId = e.dataTransfer.getData('meshId');
     if (draggedId && draggedId !== meshId) {
       setParent(draggedId, meshId);
@@ -68,7 +75,9 @@ const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
   };
 
   const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault(); // Allow drop
+    if (!isProcedure) {
+        e.preventDefault(); // Allow drop only if not procedure
+    }
   };
 
   return (
@@ -80,20 +89,27 @@ const GraphNode: React.FC<GraphNodeProps> = ({ meshId, depth }) => {
         `}
         style={{ marginLeft: `${depth * 16}px` }}
         onClick={() => selectMesh(meshId)}
-        draggable
+        draggable={!isProcedure}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
-        <GripVertical size={12} className="opacity-0 group-hover:opacity-50 cursor-grab active:cursor-grabbing" />
+        {!isProcedure ? (
+             <GripVertical size={12} className="opacity-0 group-hover:opacity-50 cursor-grab active:cursor-grabbing" />
+        ) : (
+             <Lock size={12} className="text-zinc-600" />
+        )}
+
         {depth > 0 && <CornerDownRight size={12} className="text-zinc-600" />}
         
-        {/* Operation Indicator */}
-        <div className="w-4 h-4 flex items-center justify-center" title={mesh.operation}>
-             <OpIcon size={12} className={mesh.operation === 'subtract' ? 'text-red-400' : (mesh.operation === 'intersect' ? 'text-emerald-400' : 'text-blue-400')} />
-        </div>
+        {/* Operation Indicator or Procedure Icon */}
+        {!isProcedure && (
+            <div className="w-4 h-4 flex items-center justify-center" title={mesh.operation}>
+                <OpIcon size={12} className={mesh.operation === 'subtract' ? 'text-red-400' : (mesh.operation === 'intersect' ? 'text-emerald-400' : 'text-blue-400')} />
+            </div>
+        )}
 
-        <Icon size={14} className={isSelected ? 'text-indigo-400' : 'text-zinc-500'} />
+        <Icon size={14} className={isSelected ? 'text-indigo-400' : (isProcedure ? 'text-orange-400' : 'text-zinc-500')} />
         
         <span className="text-xs font-medium truncate select-none capitalize flex-1">
            {mesh.name || `${mesh.type} ${meshId.substring(0, 4)}`}
@@ -124,7 +140,15 @@ export const SceneGraph = () => {
   const meshes = useStore(state => state.meshes);
   const setParent = useStore(state => state.setParent);
 
+  // Filter roots. We want Procedure Mesh at top, then other roots.
   const roots = meshes.filter(m => !m.parentId || !meshes.find(p => p.id === m.parentId));
+  
+  // Sort: Procedure first
+  const sortedRoots = [...roots].sort((a, b) => {
+      if (a.id === PROCEDURE_MESH_ID) return -1;
+      if (b.id === PROCEDURE_MESH_ID) return 1;
+      return 0;
+  });
 
   const handleRootDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -150,7 +174,7 @@ export const SceneGraph = () => {
           </div>
       )}
 
-      {roots.map(mesh => (
+      {sortedRoots.map(mesh => (
         <GraphNode key={mesh.id} meshId={mesh.id} depth={0} />
       ))}
       

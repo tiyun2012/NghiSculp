@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useStore, MeshNode, MeshType, MeshOperation } from '../store';
+import { useStore, MeshNode, MeshType, MeshOperation, PROCEDURE_MESH_ID } from '../store';
 import { 
   Move, 
   RotateCw, 
@@ -13,11 +13,15 @@ import {
   Cylinder,
   Scissors,
   Combine,
-  Crosshair
+  Crosshair,
+  Save,
+  Scan
 } from 'lucide-react';
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
 import { SceneGraph } from './SceneGraph';
+import { generateIsosurfaceGeometry } from '../utils/sdf';
+import { serializeGeometry } from '../utils/geometry';
 
 export const UI = () => {
   const resolution = useStore(state => state.resolution);
@@ -26,6 +30,8 @@ export const UI = () => {
   const setTransformMode = useStore(state => state.setTransformMode);
   const showWireframe = useStore(state => state.showWireframe);
   const setShowWireframe = useStore(state => state.setShowWireframe);
+  const xrayMode = useStore(state => state.xrayMode);
+  const setXrayMode = useStore(state => state.setXrayMode);
   const meshes = useStore(state => state.meshes);
   const addMesh = useStore(state => state.addMesh);
   const removeMesh = useStore(state => state.removeMesh);
@@ -39,44 +45,58 @@ export const UI = () => {
 
   // Generic add mesh function
   const handleAddMesh = (type: MeshType) => {
+    // Determine parent. If selected is ProcedureMesh, force null (new root).
+    // If selected is a Guide, parent to it.
+    let targetParentId = selectedMeshId;
+    if (targetParentId === PROCEDURE_MESH_ID) {
+        targetParentId = null;
+    }
+
     const newMesh: MeshNode = {
       id: uuidv4(),
-      name: `${type.charAt(0).toUpperCase() + type.slice(1)}`,
+      name: 'Guide Mesh',
       type: type,
       operation: 'union',
       position: [0, 0, 0],
       rotation: [0, 0, 0],
       scale: 1,
-      parentId: selectedMeshId || null, // Auto-parent to selected if exists
+      parentId: targetParentId || null, 
       visible: true
     };
     addMesh(newMesh);
   };
 
   const handleDeleteSelected = () => {
-    if (selectedMeshId) {
+    if (selectedMeshId && selectedMeshId !== PROCEDURE_MESH_ID) {
       removeMesh(selectedMeshId);
     }
   };
 
   const handleSetOperation = (op: MeshOperation) => {
-      if (selectedMeshId) {
+      if (selectedMeshId && selectedMeshId !== PROCEDURE_MESH_ID) {
           updateMesh(selectedMeshId, { operation: op });
       }
   };
 
   const handleGrow = () => {
-    if (meshes.length === 0) return;
+    // Only grow on Guide meshes
+    if (meshes.length <= 1) return; // Only procedure mesh exists
 
     setIsGenerating(true);
     
-    // Target the selected mesh, or fallback to the first mesh (Root)
-    let parent = meshes[0];
-    if (selectedMeshId) {
-        const found = meshes.find(m => m.id === selectedMeshId);
-        if (found) parent = found;
+    // Target the selected mesh, or fallback to the first GUIDE mesh
+    let parentId = selectedMeshId;
+    if (!parentId || parentId === PROCEDURE_MESH_ID) {
+        const firstGuide = meshes.find(m => m.id !== PROCEDURE_MESH_ID);
+        if (firstGuide) parentId = firstGuide.id;
+        else {
+            setIsGenerating(false);
+            return;
+        }
     }
-
+    
+    // Find parent object to calculate surface
+    // Simplified: Just add a child with random offset
     const u = Math.random();
     const v = Math.random();
     const theta = 2 * Math.PI * u;
@@ -87,7 +107,6 @@ export const UI = () => {
     const z = Math.cos(phi);
     
     const normal = new THREE.Vector3(x, y, z);
-    // Align with surface (approx radius 0.5)
     const localPos = normal.clone().multiplyScalar(0.5);
     const localScale = 0.15 + Math.random() * 0.25;
     
@@ -99,7 +118,7 @@ export const UI = () => {
       position: localPos.toArray() as [number, number, number],
       rotation: [Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI],
       scale: localScale,
-      parentId: parent.id,
+      parentId: parentId,
       visible: true
     };
 
@@ -108,16 +127,16 @@ export const UI = () => {
   };
 
   const handleRingGen = () => {
-    if (meshes.length === 0) return;
+    if (meshes.length <= 1) return;
     
-    let parent = meshes[0];
-    if (selectedMeshId) {
-        const found = meshes.find(m => m.id === selectedMeshId);
-        if (found) parent = found;
+    let parentId = selectedMeshId;
+    if (!parentId || parentId === PROCEDURE_MESH_ID) {
+        const firstGuide = meshes.find(m => m.id !== PROCEDURE_MESH_ID);
+        if (firstGuide) parentId = firstGuide.id;
+        else return;
     }
 
     const count = 6;
-    // Align with surface (approx radius 0.5)
     const radiusOffset = 0.5; 
     
     for(let i=0; i<count; i++) {
@@ -134,11 +153,44 @@ export const UI = () => {
             position: localPos.toArray() as [number, number, number],
             rotation: [0, Math.random() * Math.PI, 0],
             scale: 0.2,
-            parentId: parent.id,
+            parentId: parentId,
             visible: true
         });
     }
   };
+
+  const handleBake = () => {
+      // Bake the Procedure Mesh Result into a new separate static mesh
+      const guideRoot = meshes.find(m => !m.parentId && m.id !== PROCEDURE_MESH_ID);
+      if (!guideRoot) return;
+
+      setIsGenerating(true);
+      
+      requestAnimationFrame(() => {
+          // Use the SDF generator for baking to match the visual
+          const geo = generateIsosurfaceGeometry(meshes, Math.max(2, Math.floor(resolution)));
+          const data = serializeGeometry(geo);
+          
+          const bakeId = uuidv4();
+          addMesh({
+              id: bakeId,
+              name: 'Baked Metaball',
+              type: 'custom',
+              operation: 'union',
+              position: [0,0,0], // SDF result is world-space
+              rotation: [0,0,0],
+              scale: 1,
+              parentId: null, 
+              visible: true,
+              geometryData: data
+          });
+          
+          geo.dispose();
+          setIsGenerating(false);
+      });
+  };
+
+  const isGuideSelected = selectedMeshId && selectedMeshId !== PROCEDURE_MESH_ID;
 
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-4">
@@ -197,13 +249,20 @@ export const UI = () => {
             >
                 <Layers size={18} />
             </button>
+            <button 
+                onClick={() => setXrayMode(!xrayMode)}
+                className={`p-2 rounded-lg border transition-all ${xrayMode ? 'border-teal-500 bg-teal-500/10 text-teal-400' : 'border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                title="Toggle X-Ray"
+            >
+                <Scan size={18} />
+            </button>
         </div>
 
         <div className="h-8 w-px bg-zinc-700 mx-2"></div>
 
         <button 
            onClick={handleDeleteSelected}
-           disabled={!selectedMeshId}
+           disabled={!isGuideSelected}
            className="p-2 rounded-lg border border-red-500/20 bg-red-500/10 text-red-400 hover:bg-red-500/20 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
            title="Delete Selected"
         >
@@ -238,7 +297,7 @@ export const UI = () => {
                 <span>Capsule</span>
             </button>
 
-            {selectedMesh && (
+            {selectedMesh && !selectedMesh.locked && (
             <>
                 <div className="h-px bg-zinc-700 my-1"></div>
                 <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1">Boolean Op</h2>
@@ -272,14 +331,20 @@ export const UI = () => {
             <div className="h-px bg-zinc-700 my-1"></div>
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1">Generators</h2>
 
-            <button onClick={handleGrow} disabled={meshes.length === 0 || isGenerating} className="tool-btn">
+            <button onClick={handleGrow} disabled={meshes.length <= 1 || isGenerating} className="tool-btn">
                 <div className="icon-box bg-emerald-500/20 group-hover:bg-emerald-500/30"><Zap size={16} className="text-emerald-400" /></div>
                 <span>Organic Grow</span>
             </button>
 
-            <button onClick={handleRingGen} disabled={meshes.length === 0} className="tool-btn">
+            <button onClick={handleRingGen} disabled={meshes.length <= 1} className="tool-btn">
                  <div className="icon-box bg-purple-500/20 group-hover:bg-purple-500/30"><GitMerge size={16} className="text-purple-400" /></div>
                 <span>Edge Satellite (Cut)</span>
+            </button>
+
+            <div className="h-px bg-zinc-700 my-1"></div>
+            <button onClick={handleBake} disabled={isGenerating || meshes.length <= 1} className="tool-btn bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/20 text-orange-200">
+                <div className="icon-box bg-orange-500/20"><Save size={16} className="text-orange-400" /></div>
+                <span>Bake Procedure</span>
             </button>
          </div>
       </div>

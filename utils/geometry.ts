@@ -90,6 +90,19 @@ export const rebuildGeometry = (data: { position: number[], index?: number[], no
     return geometry;
 };
 
+// Serialize geometry for storage
+export const serializeGeometry = (geometry: THREE.BufferGeometry) => {
+    const pos = geometry.attributes.position.array;
+    const norm = geometry.attributes.normal?.array;
+    const idx = geometry.index?.array;
+
+    return {
+        position: Array.from(pos),
+        normal: norm ? Array.from(norm) : [],
+        index: idx ? Array.from(idx) : []
+    };
+};
+
 // Generic Wireframe Generator
 export const createQuadWireframe = (type: MeshType, resolution: number) => {
   if (type === 'custom') return new THREE.BufferGeometry();
