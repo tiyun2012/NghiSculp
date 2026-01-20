@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import { TransformControls, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore, MeshNode, PROCEDURE_MESH_ID } from '../store';
-import { createQuadWireframe, createQuadGeometry } from '../utils/geometry';
+import { createQuadWireframe, createQuadGeometry, rebuildGeometry } from '../utils/geometry';
 import { generateIsosurfaceGeometry } from '../utils/sdf';
 
 interface QuadMeshProps {
@@ -27,18 +27,19 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   const isProcedureMesh = data.id === PROCEDURE_MESH_ID;
   const isSelected = selectedMeshId === data.id;
 
+  // Memoize children to avoid inline filter causing render issues, though filter is cheap.
+  // We only re-calculate children when the *entire* meshes array changes or this ID changes.
+  const children = useMemo(() => meshes.filter(m => m.parentId === data.id), [meshes, data.id]);
+
   // -- LOGIC FOR PROCEDURE MESH --
   const guideRoot = useMemo(() => {
     if (!isProcedureMesh) return null;
     return meshes.find(m => !m.parentId && m.id !== PROCEDURE_MESH_ID);
   }, [meshes, isProcedureMesh]);
 
-  const isSimpleHierarchy = useMemo(() => {
-     if (!guideRoot) return false;
-     return !meshes.some(m => m.parentId === guideRoot.id);
-  }, [meshes, guideRoot]);
-
   // -- LOGIC FOR GEOMETRY CALCULATION --
+  // CRITICAL FIX: Split dependency logic. 
+  // Procedure Mesh depends on 'meshes'. Regular meshes MUST NOT depend on 'meshes' to avoid regen on every drag.
   const finalGeometry = useMemo(() => {
     if (isProcedureMesh) {
         if (!guideRoot) return new THREE.BufferGeometry();
@@ -54,12 +55,24 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
     }
 
     if (data.type === 'custom' && data.geometryData) {
-       return new THREE.BoxGeometry(1,1,1);
+       return rebuildGeometry(data.geometryData);
     }
     
-    return createQuadGeometry(data.type, 4);
+    // Feature: Use global resolution for standard primitives
+    return createQuadGeometry(data.type, resolution);
 
-  }, [data.id, data.type, data.geometryData, meshes, resolution, isProcedureMesh, guideRoot, smartRetopology, blendStrength]);
+  }, [
+      // Conditional Dependencies
+      isProcedureMesh,
+      data.type, 
+      data.geometryData,
+      resolution,
+      // Only used if isProcedureMesh is true:
+      isProcedureMesh ? meshes : null,
+      isProcedureMesh ? guideRoot : null,
+      isProcedureMesh ? smartRetopology : null,
+      isProcedureMesh ? blendStrength : null
+  ]);
 
   // Dispose geometry on unmount or change
   useEffect(() => {
@@ -70,8 +83,8 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   // -- WIREFRAME LOGIC --
   const wireframeGeo = useMemo(() => {
     if (data.type === 'custom') return null;
-    return createQuadWireframe(data.type || 'sphere', 4);
-  }, [data.type]);
+    return createQuadWireframe(data.type || 'sphere', resolution);
+  }, [data.type, resolution]);
   
   const [displayWireframe, setDisplayWireframe] = useState<THREE.BufferGeometry | null>(null);
 
@@ -97,7 +110,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
              }
          }
      } 
-  }, [showWireframe, finalGeometry, isProcedureMesh, isSimpleHierarchy, resolution, smartRetopology]);
+  }, [showWireframe, finalGeometry, isProcedureMesh]);
 
 
   // -- TRANSFORM SYNC --
@@ -213,7 +226,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
             )}
             
             {/* RENDER CHILDREN */}
-            {meshes.filter(m => m.parentId === data.id).map(child => (
+            {children.map(child => (
                 <group key={child.id}>
                     <Line 
                         points={[[0, 0, 0], child.position]} 
