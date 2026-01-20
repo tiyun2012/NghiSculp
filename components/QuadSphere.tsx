@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import { TransformControls, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore, MeshNode, PROCEDURE_MESH_ID } from '../store';
-import { createQuadWireframe, createQuadGeometry } from '../utils/geometry';
+import { createQuadWireframe, createQuadGeometry, rebuildGeometry } from '../utils/geometry';
 import { generateIsosurfaceGeometry } from '../utils/sdf';
 
 interface QuadMeshProps {
@@ -33,11 +33,6 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
     return meshes.find(m => !m.parentId && m.id !== PROCEDURE_MESH_ID);
   }, [meshes, isProcedureMesh]);
 
-  const isSimpleHierarchy = useMemo(() => {
-     if (!guideRoot) return false;
-     return !meshes.some(m => m.parentId === guideRoot.id);
-  }, [meshes, guideRoot]);
-
   // -- LOGIC FOR GEOMETRY CALCULATION --
   const finalGeometry = useMemo(() => {
     if (isProcedureMesh) {
@@ -54,12 +49,22 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
     }
 
     if (data.type === 'custom' && data.geometryData) {
-       return new THREE.BoxGeometry(1,1,1);
+       return rebuildGeometry(data.geometryData);
     }
     
-    return createQuadGeometry(data.type, 4);
+    // Feature: Use global resolution for standard primitives
+    return createQuadGeometry(data.type, resolution);
 
-  }, [data.id, data.type, data.geometryData, meshes, resolution, isProcedureMesh, guideRoot, smartRetopology, blendStrength]);
+  }, [
+      isProcedureMesh,
+      data.type, 
+      data.geometryData, 
+      resolution, 
+      isProcedureMesh ? meshes : null,
+      isProcedureMesh ? guideRoot : null,
+      isProcedureMesh ? smartRetopology : null,
+      isProcedureMesh ? blendStrength : null
+  ]);
 
   // Dispose geometry on unmount or change
   useEffect(() => {
@@ -70,8 +75,8 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   // -- WIREFRAME LOGIC --
   const wireframeGeo = useMemo(() => {
     if (data.type === 'custom') return null;
-    return createQuadWireframe(data.type || 'sphere', 4);
-  }, [data.type]);
+    return createQuadWireframe(data.type || 'sphere', resolution);
+  }, [data.type, resolution]);
   
   const [displayWireframe, setDisplayWireframe] = useState<THREE.BufferGeometry | null>(null);
 
@@ -97,7 +102,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
              }
          }
      } 
-  }, [showWireframe, finalGeometry, isProcedureMesh, isSimpleHierarchy, resolution, smartRetopology]);
+  }, [showWireframe, finalGeometry, isProcedureMesh]);
 
 
   // -- TRANSFORM SYNC --
@@ -125,8 +130,6 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
 
   // -- RENDER --
   
-  if (data.visible === false) return null;
-
   // CASE 1: PROCEDURE MESH (OUTPUT)
   if (isProcedureMesh) {
       if (!guideRoot || !finalGeometry.getAttribute('position')) return null;
@@ -138,6 +141,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
             scale={[renderScale, renderScale, renderScale]}
             geometry={finalGeometry}
             onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
+            visible={data.visible}
         >
              <meshMatcapMaterial 
                 color="#e0e0e0" 
@@ -189,6 +193,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
             onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
             onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
             onPointerOut={(e) => { e.stopPropagation(); setHover(false); }}
+            visible={data.visible}
         >
             <meshStandardMaterial
                 color={color} 

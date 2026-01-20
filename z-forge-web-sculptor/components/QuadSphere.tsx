@@ -27,19 +27,15 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   const isProcedureMesh = data.id === PROCEDURE_MESH_ID;
   const isSelected = selectedMeshId === data.id;
 
-  // Memoize children to avoid inline filter causing render issues, though filter is cheap.
-  // We only re-calculate children when the *entire* meshes array changes or this ID changes.
-  const children = useMemo(() => meshes.filter(m => m.parentId === data.id), [meshes, data.id]);
-
   // -- LOGIC FOR PROCEDURE MESH --
   const guideRoot = useMemo(() => {
     if (!isProcedureMesh) return null;
     return meshes.find(m => !m.parentId && m.id !== PROCEDURE_MESH_ID);
   }, [meshes, isProcedureMesh]);
 
+  const children = useMemo(() => meshes.filter(m => m.parentId === data.id), [meshes, data.id]);
+
   // -- LOGIC FOR GEOMETRY CALCULATION --
-  // CRITICAL FIX: Split dependency logic. 
-  // Procedure Mesh depends on 'meshes'. Regular meshes MUST NOT depend on 'meshes' to avoid regen on every drag.
   const finalGeometry = useMemo(() => {
     if (isProcedureMesh) {
         if (!guideRoot) return new THREE.BufferGeometry();
@@ -62,12 +58,10 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
     return createQuadGeometry(data.type, resolution);
 
   }, [
-      // Conditional Dependencies
       isProcedureMesh,
       data.type, 
-      data.geometryData,
-      resolution,
-      // Only used if isProcedureMesh is true:
+      data.geometryData, 
+      resolution, // Now updates when resolution changes
       isProcedureMesh ? meshes : null,
       isProcedureMesh ? guideRoot : null,
       isProcedureMesh ? smartRetopology : null,
@@ -137,9 +131,8 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   const [hovered, setHover] = useState(false);
 
   // -- RENDER --
+  // We no longer return null if !visible. We render the mesh invisibly to allow Gizmo interaction.
   
-  if (data.visible === false) return null;
-
   // CASE 1: PROCEDURE MESH (OUTPUT)
   if (isProcedureMesh) {
       if (!guideRoot || !finalGeometry.getAttribute('position')) return null;
@@ -151,6 +144,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
             scale={[renderScale, renderScale, renderScale]}
             geometry={finalGeometry}
             onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
+            visible={data.visible}
         >
              <meshMatcapMaterial 
                 color="#e0e0e0" 
@@ -202,6 +196,7 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
             onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
             onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
             onPointerOut={(e) => { e.stopPropagation(); setHover(false); }}
+            visible={data.visible}
         >
             <meshStandardMaterial
                 color={color} 
