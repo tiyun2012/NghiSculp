@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { TransformControls, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore, MeshNode, PROCEDURE_MESH_ID } from '../store';
@@ -10,7 +10,10 @@ interface QuadMeshProps {
 }
 
 export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
+  // We use a Group for the transform hierarchy to ensure children remain visible 
+  // even if the visual geometry of this node is hidden.
+  const [groupElement, setGroupElement] = useState<THREE.Group | null>(null);
+  const [meshElement, setMeshElement] = useState<THREE.Mesh | null>(null);
   
   // Store selectors
   const resolution = useStore((state) => state.resolution);
@@ -27,13 +30,15 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   const isProcedureMesh = data.id === PROCEDURE_MESH_ID;
   const isSelected = selectedMeshId === data.id;
 
-  // -- LOGIC FOR PROCEDURE MESH --
+  // -- HIERARCHY HELPERS --
+  const children = useMemo(() => meshes.filter(m => m.parentId === data.id), [meshes, data.id]);
+  
   const guideRoot = useMemo(() => {
     if (!isProcedureMesh) return null;
     return meshes.find(m => !m.parentId && m.id !== PROCEDURE_MESH_ID);
   }, [meshes, isProcedureMesh]);
 
-  // -- LOGIC FOR GEOMETRY CALCULATION --
+  // -- GEOMETRY CALCULATION --
   const finalGeometry = useMemo(() => {
     if (isProcedureMesh) {
         if (!guideRoot) return new THREE.BufferGeometry();
@@ -52,7 +57,6 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
        return rebuildGeometry(data.geometryData);
     }
     
-    // Feature: Use global resolution for standard primitives
     return createQuadGeometry(data.type, resolution);
 
   }, [
@@ -66,11 +70,9 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
       isProcedureMesh ? blendStrength : null
   ]);
 
-  // Dispose geometry on unmount or change
   useEffect(() => {
     return () => { finalGeometry.dispose(); }
   }, [finalGeometry]);
-
 
   // -- WIREFRAME LOGIC --
   const wireframeGeo = useMemo(() => {
@@ -86,12 +88,9 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
             setDisplayWireframe(null);
             return;
          }
-         
-         // USE THE CUSTOM QUAD WIREFRAME FROM SDF GENERATOR IF AVAILABLE
          if (finalGeometry.userData.quadWireframe) {
              setDisplayWireframe(finalGeometry.userData.quadWireframe);
          } else {
-             // Fallback
              try {
                 const geo = new THREE.WireframeGeometry(finalGeometry);
                 setDisplayWireframe(geo);
@@ -102,21 +101,19 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
              }
          }
      } 
-  }, [showWireframe, finalGeometry, isProcedureMesh]);
+  }, [showWireframe, finalGeometry, isProcedureMesh, resolution]);
 
 
   // -- TRANSFORM SYNC --
-  const renderPosition: [number,number,number] = isProcedureMesh ? [0,0,0] : data.position;
-  const renderRotation: [number,number,number] = isProcedureMesh ? [0,0,0] : data.rotation;
-  const renderScale = isProcedureMesh ? 1 : data.scale;
-
-
-  // -- INTERACTION --
   const handleTransformChange = useCallback(() => {
-    if (meshRef.current && !isProcedureMesh) {
-      const pos = meshRef.current.position.toArray();
-      const rot = meshRef.current.rotation.toArray().slice(0, 3) as [number, number, number];
-      const scale = meshRef.current.scale.x;
+    // If Procedure Mesh, we track the meshElement (it has no group usually)
+    // If Guide Mesh, we track the groupElement (the hierarchy anchor)
+    const target = isProcedureMesh ? meshElement : groupElement;
+
+    if (target && !isProcedureMesh) {
+      const pos = target.position.toArray();
+      const rot = target.rotation.toArray().slice(0, 3) as [number, number, number];
+      const scale = target.scale.x;
 
       updateMesh(data.id, {
         position: pos,
@@ -124,28 +121,44 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
         scale: scale 
       });
     }
-  }, [data.id, updateMesh, isProcedureMesh]);
+  }, [data.id, updateMesh, isProcedureMesh, groupElement, meshElement]);
 
-  const [hovered, setHover] = useState(false);
-
-  // -- RENDER --
+  // -- VISIBILITY LOGIC --
+  const isHidden = data.visible === false;
   
-  // CASE 1: PROCEDURE MESH (OUTPUT)
+  // "Ghost Mode": If selected but hidden, show it as transparent so we can see what we edit.
+  // Otherwise, obey isHidden.
+  const showVisuals = !isHidden || isSelected;
+
+  // Material settings
+  const opacity = isHidden ? 0.15 : (xrayMode ? 0.3 : 1.0);
+  const transparent = isHidden || xrayMode;
+  const depthWrite = !isHidden && !xrayMode; // Don't write depth if hidden/xray to see through
+
+  // -- RENDER: PROCEDURE MESH (SPECIAL CASE) --
   if (isProcedureMesh) {
       if (!guideRoot || !finalGeometry.getAttribute('position')) return null;
 
+      // If strictly hidden and not selected, don't render.
+      // But usually procedure mesh is the "result", so we might want to respect visible=false strictly?
+      // Let's allow ghosting here too for consistency.
+      if (!showVisuals) return null;
+
       return (
         <mesh
-            position={renderPosition}
-            rotation={renderRotation}
-            scale={[renderScale, renderScale, renderScale]}
+            ref={setMeshElement}
+            position={[0,0,0]} // Procedure mesh is always at origin of scene
+            rotation={[0,0,0]}
+            scale={[1,1,1]}
             geometry={finalGeometry}
             onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
-            visible={data.visible}
+            visible={true} 
         >
              <meshMatcapMaterial 
                 color="#e0e0e0" 
                 matcap={null}
+                opacity={opacity}
+                transparent={transparent}
             />
             <meshStandardMaterial
                 color="#9e9e9e"
@@ -153,8 +166,10 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
                 metalness={0.1}
                 polygonOffset
                 polygonOffsetFactor={1}
+                opacity={opacity}
+                transparent={transparent}
             />
-             {showWireframe && displayWireframe && (
+             {showWireframe && displayWireframe && !isHidden && (
                 <lineSegments geometry={displayWireframe}>
                     <lineBasicMaterial color="#111" opacity={0.3} transparent depthTest={true} />
                 </lineSegments>
@@ -163,12 +178,11 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
       );
   }
 
-  // CASE 2: GUIDE MESH (INPUT)
+  // -- RENDER: GUIDE MESH (HIERARCHY NODE) --
   let color = "#888888"; 
   if (data.operation === 'subtract') color = "#ff4444"; 
   if (data.operation === 'intersect') color = "#44ff44";
   if (data.operation === 'union' && data.parentId) color = "#4444ff";
-
   const isGuideRoot = !data.parentId;
   if (isGuideRoot) color = "#ffffff";
 
@@ -176,61 +190,71 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
 
   return (
     <>
-        {isSelected && (
+        {/* GIZMO ATTACHES TO THE GROUP (TRANSFORM NODE) */}
+        {isSelected && groupElement && (
             <TransformControls 
-                object={meshRef.current as THREE.Object3D}
+                object={groupElement}
                 mode={transformMode} 
                 onObjectChange={handleTransformChange}
                 size={0.8}
             />
         )}
-        <mesh
-            ref={meshRef}
+        
+        {/* GROUP: TRANSFORM HIERARCHY (ALWAYS VISIBLE) */}
+        <group
+            ref={setGroupElement}
             position={data.position}
             rotation={data.rotation}
             scale={[data.scale, data.scale, data.scale]}
-            geometry={finalGeometry} 
-            onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
-            onPointerOver={(e) => { e.stopPropagation(); setHover(true); }}
-            onPointerOut={(e) => { e.stopPropagation(); setHover(false); }}
-            visible={data.visible}
+            visible={true} 
         >
-            <meshStandardMaterial
-                color={color} 
-                roughness={0.5}
-                metalness={0.1}
-                transparent={xrayMode}
-                opacity={xrayMode ? 0.3 : 1.0}
-                depthWrite={!xrayMode}
-                polygonOffset={xrayMode}
-                polygonOffsetFactor={-1}
-            />
+            {/* VISUAL GEOMETRY (CAN BE GHOSTED) */}
+            <mesh
+                geometry={finalGeometry} 
+                onClick={(e) => { e.stopPropagation(); selectMesh(data.id); }}
+                // We keep threejs 'visible' true so raycast works, but use opacity for visual hiding
+                visible={showVisuals}
+            >
+                <meshStandardMaterial
+                    color={color} 
+                    roughness={0.5}
+                    metalness={0.1}
+                    transparent={transparent}
+                    opacity={opacity}
+                    depthWrite={depthWrite}
+                    polygonOffset={xrayMode}
+                    polygonOffsetFactor={-1}
+                />
+                
+                {shouldShowWireframe && (
+                     <lineSegments geometry={wireframeGeo!}>
+                        <lineBasicMaterial 
+                            color={isSelected ? "#ffffff" : "#000000"} 
+                            transparent 
+                            opacity={isHidden ? 0.2 : (isSelected ? 0.8 : 0.2)} 
+                            depthTest={false} 
+                        />
+                     </lineSegments>
+                )}
+            </mesh>
             
-            {shouldShowWireframe && (
-                 <lineSegments geometry={wireframeGeo!}>
-                    <lineBasicMaterial 
-                        color={isSelected ? "#ffffff" : "#000000"} 
-                        transparent 
-                        opacity={isSelected ? 0.8 : 0.2} 
-                        depthTest={false} 
-                    />
-                 </lineSegments>
-            )}
-            
-            {/* RENDER CHILDREN */}
-            {meshes.filter(m => m.parentId === data.id).map(child => (
-                <group key={child.id}>
-                    <Line 
-                        points={[[0, 0, 0], child.position]} 
-                        color="gray" 
-                        opacity={0.5} 
-                        transparent 
-                        lineWidth={1} 
-                    />
-                    <QuadSphere data={child} />
-                </group>
+            {/* CHILDREN (Always rendered inside group to inherit transform) */}
+            {children.map(child => (
+                <QuadSphere key={child.id} data={child} />
             ))}
-        </mesh>
+
+            {/* CONNECTION LINES (Visual aid for hierarchy) */}
+            {children.map(child => (
+                 <Line 
+                    key={`line-${child.id}`}
+                    points={[[0, 0, 0], child.position]} 
+                    color="gray" 
+                    opacity={0.3} 
+                    transparent 
+                    lineWidth={1} 
+                />
+            ))}
+        </group>
     </>
   );
 };
