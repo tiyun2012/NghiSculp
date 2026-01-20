@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { TransformControls, Line } from '@react-three/drei';
+import { Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore, MeshNode, PROCEDURE_MESH_ID } from '../store';
 import { createQuadWireframe, createQuadGeometry, rebuildGeometry } from '../utils/geometry';
@@ -10,24 +10,22 @@ interface QuadMeshProps {
 }
 
 export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
-  // We use a Group for the transform hierarchy to ensure children remain visible 
-  // even if the visual geometry of this node is hidden.
-  const [groupElement, setGroupElement] = useState<THREE.Group | null>(null);
-  const [meshElement, setMeshElement] = useState<THREE.Mesh | null>(null);
+  const isProcedureMesh = data.id === PROCEDURE_MESH_ID;
+  const GUIDE_RESOLUTION = 8; // Fixed low resolution for guides to speed up performance
+
+  // -- OPTIMIZED STORE SELECTORS --
+  // Only the procedure mesh subscribes to global resolution/SDF changes.
+  // Guide meshes stay static to prevent massive re-renders when dragging sliders.
+  const resolution = useStore((state) => isProcedureMesh ? state.resolution : GUIDE_RESOLUTION);
+  const smartRetopology = useStore((state) => isProcedureMesh ? state.smartRetopology : false);
+  const blendStrength = useStore((state) => isProcedureMesh ? state.blendStrength : 0);
   
-  // Store selectors
-  const resolution = useStore((state) => state.resolution);
-  const smartRetopology = useStore((state) => state.smartRetopology);
-  const blendStrength = useStore((state) => state.blendStrength);
   const showWireframe = useStore((state) => state.showWireframe);
   const xrayMode = useStore((state) => state.xrayMode);
   const selectedMeshId = useStore((state) => state.selectedMeshId);
   const selectMesh = useStore((state) => state.selectMesh);
-  const transformMode = useStore((state) => state.transformMode);
-  const updateMesh = useStore((state) => state.updateMesh);
   const meshes = useStore((state) => state.meshes);
 
-  const isProcedureMesh = data.id === PROCEDURE_MESH_ID;
   const isSelected = selectedMeshId === data.id;
 
   // -- HIERARCHY HELPERS --
@@ -103,26 +101,6 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
      } 
   }, [showWireframe, finalGeometry, isProcedureMesh, resolution]);
 
-
-  // -- TRANSFORM SYNC --
-  const handleTransformChange = useCallback(() => {
-    // If Procedure Mesh, we track the meshElement (it has no group usually)
-    // If Guide Mesh, we track the groupElement (the hierarchy anchor)
-    const target = isProcedureMesh ? meshElement : groupElement;
-
-    if (target && !isProcedureMesh) {
-      const pos = target.position.toArray();
-      const rot = target.rotation.toArray().slice(0, 3) as [number, number, number];
-      const scale = target.scale.x;
-
-      updateMesh(data.id, {
-        position: pos,
-        rotation: rot,
-        scale: scale 
-      });
-    }
-  }, [data.id, updateMesh, isProcedureMesh, groupElement, meshElement]);
-
   // -- VISIBILITY LOGIC --
   const isHidden = data.visible === false;
   
@@ -133,21 +111,18 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
   // Material settings
   const opacity = isHidden ? 0.15 : (xrayMode ? 0.3 : 1.0);
   const transparent = isHidden || xrayMode;
-  const depthWrite = !isHidden && !xrayMode; // Don't write depth if hidden/xray to see through
+  const depthWrite = !isHidden && !xrayMode; 
 
   // -- RENDER: PROCEDURE MESH (SPECIAL CASE) --
   if (isProcedureMesh) {
       if (!guideRoot || !finalGeometry.getAttribute('position')) return null;
 
-      // If strictly hidden and not selected, don't render.
-      // But usually procedure mesh is the "result", so we might want to respect visible=false strictly?
-      // Let's allow ghosting here too for consistency.
       if (!showVisuals) return null;
 
       return (
         <mesh
-            ref={setMeshElement}
-            position={[0,0,0]} // Procedure mesh is always at origin of scene
+            name={data.id}
+            position={[0,0,0]} 
             rotation={[0,0,0]}
             scale={[1,1,1]}
             geometry={finalGeometry}
@@ -190,19 +165,10 @@ export const QuadSphere: React.FC<QuadMeshProps> = ({ data }) => {
 
   return (
     <>
-        {/* GIZMO ATTACHES TO THE GROUP (TRANSFORM NODE) */}
-        {isSelected && groupElement && (
-            <TransformControls 
-                object={groupElement}
-                mode={transformMode} 
-                onObjectChange={handleTransformChange}
-                size={0.8}
-            />
-        )}
-        
         {/* GROUP: TRANSFORM HIERARCHY (ALWAYS VISIBLE) */}
+        {/* We attach the ID to the group so the global GizmoManager can find it */}
         <group
-            ref={setGroupElement}
+            name={data.id}
             position={data.position}
             rotation={data.rotation}
             scale={[data.scale, data.scale, data.scale]}

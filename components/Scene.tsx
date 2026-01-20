@@ -1,6 +1,6 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Environment, ContactShadows, Grid } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Environment, ContactShadows, Grid, TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
 import { QuadSphere } from './QuadSphere';
@@ -22,6 +22,75 @@ const SceneContent = () => {
       ))}
     </group>
   );
+};
+
+// GLOBAL GIZMO MANAGER
+// This component lives at the scene root and attaches the gizmo to the selected object
+// by finding it in the scene graph by name (ID). This avoids nesting issues.
+const GizmoManager = () => {
+    const selectedMeshId = useStore(state => state.selectedMeshId);
+    const transformMode = useStore(state => state.transformMode);
+    const updateMesh = useStore(state => state.updateMesh);
+    const { scene } = useThree();
+    const [target, setTarget] = useState<THREE.Object3D | null>(null);
+
+    // Watch selection and find corresponding THREE object
+    useEffect(() => {
+        if (!selectedMeshId) {
+            setTarget(null);
+            return;
+        }
+
+        // Try finding it immediately
+        let obj = scene.getObjectByName(selectedMeshId);
+        
+        if (obj) {
+            setTarget(obj);
+        } else {
+            // If not found (React render lag), retry briefly
+            const interval = setInterval(() => {
+                obj = scene.getObjectByName(selectedMeshId);
+                if (obj) {
+                    setTarget(obj);
+                    clearInterval(interval);
+                }
+            }, 50);
+            
+            // Timeout to stop looking
+            const timeout = setTimeout(() => clearInterval(interval), 1000);
+            return () => { clearInterval(interval); clearTimeout(timeout); }
+        }
+    }, [selectedMeshId, scene]);
+
+    const handleTransformChange = useCallback(() => {
+        if (target) {
+            // For groups (guides), 'target' is the group.
+            // For procedure mesh, 'target' is the mesh.
+            // In both cases, we read the local transform which is what we store.
+            
+            const pos = target.position.toArray();
+            const rot = target.rotation.toArray().slice(0, 3) as [number, number, number];
+            const scale = target.scale.x; // Uniform scale assumption
+
+            updateMesh(target.name, {
+                position: pos,
+                rotation: rot,
+                scale: scale
+            });
+        }
+    }, [target, updateMesh]);
+
+    // If we have a target, render controls attached to it
+    // We attach to 'target' but the controls themselves are rendered here (Scene root)
+    return target ? (
+        <TransformControls
+            object={target}
+            mode={transformMode}
+            onObjectChange={handleTransformChange}
+            size={0.8}
+            space="local" // Local space usually feels better for hierarchical editing
+        />
+    ) : null;
 };
 
 export const Scene = () => {
@@ -49,6 +118,9 @@ export const Scene = () => {
       <Environment preset="city" />
 
       <SceneContent />
+      
+      {/* Gizmo is rendered at root level to ensure correct pivot alignment regardless of nesting */}
+      <GizmoManager />
 
       {/* Floor and Shadows */}
       <Grid 
